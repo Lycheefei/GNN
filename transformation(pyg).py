@@ -15,13 +15,14 @@ class CustomQM9Dataset(InMemoryDataset):
         self.data, self.slices = self.collate(data_list)
         
 
-
+###Visual Node
 def apply_vn(pyg_dataset):
     vn_dataset = copy.deepcopy(pyg_dataset)
     transform = VirtualNode()
     vn_dataset.transform = transform
     return pyg_dataset
 
+###Centrality
 def add_centrality_to_node_features(data, centrality_measure='degree'):
     G = to_networkx(data, node_attrs=['x'], to_undirected=True)
 
@@ -78,8 +79,9 @@ def centrality(dataset, centrality_measure='degree'):
 
     return addCentrality_dataset
 
+###Distance Encoding
 def distance_encoding_node_augmentation(data):
-    G = to_networkx(data, node_attr=['x'], to_undirected = True)
+    G = to_networkx(data, node_attrs=['x'], to_undirected = True)
     num_nodes = data.num_nodes
 
     # Initialize the distance matrix with infinity
@@ -103,6 +105,156 @@ def distance_encoding_node_augmentation(data):
     
     return data
 
-    
+def distance_encoding_edge_rewiring(data):
 
+    G = to_networkx(data, node_attrs=['x'], edge_attrs = ['edge_attr'] to_undirected=True)
+
+    # Create a copy of the graph to avoid modifying the original
+    G_transformed = G.copy()
+
+    # Compute shortest path distances for all pairs of nodes
+    connected_components = list(nx.connected_components(G))
+    shortest_paths = {}
+
+    # Compute shortest paths for each connected component
+    for component in connected_components:
+        subgraph = G.subgraph(component)
+        component_paths = dict(nx.all_pairs_shortest_path_length(subgraph))
+        shortest_paths.update(component_paths)
+
+    # Get the list of all nodes
+    nodes = list(G.nodes)
+
+    # Add edges between all pairs of nodes
+    for i in nodes:
+        for j in nodes:
+            if i != j:  # Avoid self-loops
+                if G.has_edge(i, j):
+                    # If the edge exists in the input graph, assign distance 1
+                    G_transformed[i][j]["distance"] = 1
+                else:
+                    if j in shortest_paths[i]:
+                        # Nodes are in the same connected component
+                        distance = shortest_paths[i][j]
+                    else:
+                        # Nodes are in different connected components
+                        distance = float('inf')  # Or assign a fixed large value
+
+                    # Add the edge with the computed distance attribute
+                    G_transformed.add_edge(i, j, distance=distance)
+
+    data = from_networkx(G_transformed, group_node_attrs=['x'], group_edge_attrs=['edge_attr', 'distance'])
+    return data
+
+def distance_encoding(dataset, method = 'node_augmentation'):
+    original_dataset = copy.deepcopy(dataset)
+    distance_encoding_list = []
+    for data in dataset:
+        if method == 'node_augmentation':
+            data = distance_encoding_node_augmentation(data)
+            distance_encoding_list.append(data)
+        elif method == 'edge_rewiring':
+            data = distance_encoding_edge_rewiring(data)
+            distance_encoding_list.append(data)
+        else:
+            raise ValueError(f'Unknown distance encoding method: {method}')
+    distance_encoding_dataset = CustomQM9Dataset(distance_encoding_list)
+    return distance_encoding_dataset
+
+###Subgraph Extraction
+def extract_local_subgraph_features(data, radius=2):
+    # Convert PyG data to NetworkX graph
+    G = to_networkx(data, node_attrs=['x'], edge_attrs=['edge_attr'], to_undirected=True)
+
+    # Initialize a list to store subgraph features for each node
+    subgraph_sizes = []
+    subgraph_degrees = []
+    
+    for node in G.nodes():
+        # Extract the ego graph (subgraph) around the node
+        subgraph = nx.ego_graph(G, node, radius=radius)
+        
+        # Example feature 1: Size of the subgraph (number of nodes)
+        subgraph_size = subgraph.number_of_nodes()
+        subgraph_sizes.append(subgraph_size)
+        
+        # Example feature 2: Average degree of the subgraph
+        subgraph_degree = np.mean([d for n, d in subgraph.degree()])
+        subgraph_degrees.append(subgraph_degree)
+        
+    # Convert the features to tensors and add them as node features
+    subgraph_sizes_tensor = torch.tensor(subgraph_sizes, dtype=torch.float).view(-1, 1)
+    subgraph_degrees_tensor = torch.tensor(subgraph_degrees, dtype=torch.float).view(-1, 1)
+    
+    # Concatenate the new features to the existing node features
+    data.x = torch.cat([data.x, subgraph_sizes_tensor, subgraph_degrees_tensor], dim=-1)
+    
+    return data
+
+###Graph Encoding
+def graph_encoding(dataset, k=2):
+    GE_dataset = copy.deepcopy(dataset)
+    transform = AddLaplacianEigenvectorPE(k=2, attr_name = None)
+    GE_dataset.transform = transform
+    return GE_dataset
+
+
+###Add Extra Node on Each Edge
+def add_extra_node_on_each_edge(data):
+    # Convert PyG data to a NetworkX graph for easier manipulation
+    G = to_networkx(data, node_attrs=['x'], edge_attrs = ['edge_attr'])
+    
+    # Original number of nodes
+    num_original_nodes = G.number_of_nodes()
+    
+    # Prepare lists for new features
+    edges = list(G.edges(data=True))
+    new_node_features = []
+    new_edges_src = []
+    new_edges_dst = []
+    new_edge_features = []
+
+    for u, v, edge_data in edges:
+        # Remove the original edge
+        G.remove_edge(u, v)
+
+        # Create new node as the mean of connected node features
+        new_node_id = num_original_nodes + len(new_node_features)
+        new_node_feature = (data.x[u] + data.x[v]) / 2
+        new_node_features.append(new_node_feature)
+        
+        # Add new node with feature
+        G.add_node(new_node_id, x=new_node_feature)
+
+        # Add edges from new node to each original node
+        G.add_edge(u, new_node_id)
+        G.add_edge(new_node_id, v)
+
+        # Use original edge feature for each new edge
+        edge_feature = edge_data['edge_attr']
+        edge_feature_tensor = (
+            edge_feature if isinstance(edge_feature, torch.Tensor) else torch.tensor(edge_feature)
+        )
+        new_edge_features.append(edge_feature_tensor)  # for edge (u, new_node_id)
+        new_edge_features.append(edge_feature_tensor)  # for edge (new_node_id, v)
+    
+    # Convert back to PyG Data object
+    modified_data = from_networkx(G, group_node_attrs=['x'], group_edge_attrs=['edge_attr'])
+
+    # Update node features
+    modified_data.x = torch.cat([data.x, torch.stack(new_node_features)], dim=0)
+
+    # Update edge features to include only the new edges
+    modified_data.edge_attr = torch.stack(new_edge_features)  # Only include new edge features
+    
+    return modified_data
+
+def extra_node(dataset):
+    original_dataset = copy.deepcopy(dataset)
+    extra_node_list = []
+    for data in dataset:
+        data = add_extra_node_on_each_edge(data)
+        extra_node_list.append(data)
+    extra_node_dataset = CustomQM9Dataset(extra_node_list)
+    return extra_node_dataset
 
