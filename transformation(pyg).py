@@ -5,6 +5,7 @@ import random
 import numpy as np
 from torch_geometric.transforms import VirtualNode, AddLaplacianEigenvectorPE
 from torch_geometric.utils import from_networkx, to_networkx, to_undirected
+from torch_geometric.data import InMemoryDataset
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(device)
@@ -47,11 +48,9 @@ def add_centrality_to_node_features(data, centrality_measure='degree'):
         raise ValueError(f'Unknown centrality measure: {centrality_measure}')
     
     # Convert centrality to tensor and add as node feature
-    centrality_values = np.array([centrality[node] for node in range(dgl_graph.number_of_nodes())], dtype=np.float32).reshape(-1, 1)
-    centrality_values = torch.round(torch.tensor(centrality_values) * 10000) / 10000
-    
-    # Concatenate the centrality with existing node features
+    centrality_values = list(centrality.values())
     centrality_tensor = torch.tensor(centrality_values, dtype=torch.float).view(-1, 1)
+    centrality_tensor = (centrality_tensor - centrality_tensor.mean()) / (centrality_tensor.std() + 1e-8)
     data.x = torch.cat([data.x, centrality_tensor], dim=-1)
 
     return data
