@@ -107,7 +107,7 @@ def distance_encoding_node_augmentation(data):
 
 def distance_encoding_edge_rewiring(data):
 
-    G = to_networkx(data, node_attrs=['x'], edge_attrs = ['edge_attr'] to_undirected=True)
+    G = to_networkx(data, node_attrs=['x'], edge_attrs = ['edge_attr'], to_undirected=True)
 
     # Create a copy of the graph to avoid modifying the original
     G_transformed = G.copy()
