@@ -8,7 +8,6 @@ from torch_geometric.utils import from_networkx, to_networkx, to_undirected
 from torch_geometric.data import InMemoryDataset
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(device)
 
 class CustomQM9Dataset(InMemoryDataset):
     def __init__(self, data_list):
