@@ -57,7 +57,7 @@ def add_centrality_to_node_features(data, centrality_measure='degree'):
 def centrality(dataset, centrality_measure='degree'):
     original_dataset = copy.deepcopy(dataset)
     addCentrality_list = []
-    for data in dataset:
+    for data in original_dataset:
         if centrality_measure == 'degree':
             data = add_centrality_to_node_features(data, centrality_measure='degree')
             addCentrality_list.append(data)
@@ -68,7 +68,7 @@ def centrality(dataset, centrality_measure='degree'):
             data = add_centrality_to_node_features(data, centrality_measure='betweenness')
             addCentrality_list.append(data)
         elif centrality_measure == 'eigenvector':
-            data = add_centrality_to_node_features(data, centrality_measure='igenvector')
+            data = add_centrality_to_node_features(data, centrality_measure='eigenvector')
             addCentrality_list.append(data)
         else:
             raise ValueError(f'Unknown centrality measure: {centrality_measure}')
@@ -147,7 +147,7 @@ def distance_encoding_edge_rewiring(data):
 def distance_encoding(dataset, method = 'node_augmentation'):
     original_dataset = copy.deepcopy(dataset)
     distance_encoding_list = []
-    for data in dataset:
+    for data in original_dataset:
         if method == 'node_augmentation':
             data = distance_encoding_node_augmentation(data)
             distance_encoding_list.append(data)
@@ -188,6 +188,16 @@ def extract_local_subgraph_features(data, radius=2):
     data.x = torch.cat([data.x, subgraph_sizes_tensor, subgraph_degrees_tensor], dim=-1)
     
     return data
+
+def subgraph_extraction(dataset, radius=2):
+    original_dataset = copy.deepcopy(dataset)
+    subgraph_extraction_list = []
+    for data in original_dataset:
+        data = extract_local_subgraph_features(data, radius=radius)
+        subgraph_extraction_list.append(data)
+    subgraph_extraction_dataset = CustomQM9Dataset(subgraph_extraction_list)
+    return subgraph_extraction_dataset
+
 
 ###Graph Encoding
 def graph_encoding(dataset, k=2):
@@ -250,7 +260,7 @@ def add_extra_node_on_each_edge(data):
 def extra_node(dataset):
     original_dataset = copy.deepcopy(dataset)
     extra_node_list = []
-    for data in dataset:
+    for data in original_dataset:
         data = add_extra_node_on_each_edge(data)
         extra_node_list.append(data)
     extra_node_dataset = CustomQM9Dataset(extra_node_list)
