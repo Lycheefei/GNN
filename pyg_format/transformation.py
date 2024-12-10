@@ -20,7 +20,7 @@ def apply_vn(pyg_dataset):
     vn_dataset = copy.deepcopy(pyg_dataset)
     transform = VirtualNode()
     vn_dataset.transform = transform
-    return pyg_dataset
+    return vn_dataset
 
 ###Centrality
 def add_centrality_to_node_features(data, centrality_measure='degree'):
@@ -104,8 +104,12 @@ def distance_encoding_node_augmentation(data):
     return data
 
 def distance_encoding_edge_rewiring(data):
-
-    G = to_networkx(data, node_attrs=['x'], edge_attrs = ['edge_attr'], to_undirected=True)
+    """
+    Add edges between all pairs of nodes with shortest path distance as a new edge attribute,
+    while preserving original edge attributes.
+    """
+    # Convert to NetworkX graph
+    G = to_networkx(data, node_attrs=['x'], edge_attrs=['edge_attr'], to_undirected=True)
 
     # Create a copy of the graph to avoid modifying the original
     G_transformed = G.copy()
@@ -120,29 +124,45 @@ def distance_encoding_edge_rewiring(data):
         component_paths = dict(nx.all_pairs_shortest_path_length(subgraph))
         shortest_paths.update(component_paths)
 
-    # Get the list of all nodes
-    nodes = list(G.nodes)
+    # Get the original number of edge attributes
+    num_edge_attrs = data.edge_attr.shape[1] if data.edge_attr is not None else 0
 
     # Add edges between all pairs of nodes
+    nodes = list(G.nodes)
     for i in nodes:
         for j in nodes:
             if i != j:  # Avoid self-loops
                 if G.has_edge(i, j):
-                    # If the edge exists in the input graph, assign distance 1
-                    G_transformed[i][j]["distance"] = 1
+                    # If the edge exists in the input graph, preserve original attributes
+                    original_attr = G[i][j]['edge_attr']
+                    if isinstance(original_attr, list):  # Ensure it is a list
+                        original_attr = original_attr
+                    else:
+                        original_attr = [original_attr]
+                    # Add shortest path distance as the last attribute
+                    G_transformed[i][j]['edge_attr'] = original_attr + [1]  # Distance 1 for existing edges
                 else:
+                    # For new edges, use placeholder attributes and shortest path distance
                     if j in shortest_paths[i]:
                         # Nodes are in the same connected component
                         distance = shortest_paths[i][j]
                     else:
                         # Nodes are in different connected components
-                        distance = float('inf')  # Or assign a fixed large value
+                        distance = float('inf')  # Or assign a large value
 
-                    # Add the edge with the computed distance attribute
-                    G_transformed.add_edge(i, j, distance=distance)
+                    # Create placeholder attributes for missing original attributes
+                    new_attr = [0] * num_edge_attrs + [distance]
+                    G_transformed.add_edge(i, j, edge_attr=new_attr)
 
-    data = from_networkx(G_transformed, group_node_attrs=['x'], group_edge_attrs=['edge_attr', 'distance'])
-    return data
+    # Convert back to PyG Data object
+    new_data = from_networkx(G_transformed, group_node_attrs=['x'], group_edge_attrs=['edge_attr'])
+
+    # Ensure edge attributes are tensors
+    new_data.edge_attr = torch.tensor(new_data.edge_attr, dtype=torch.float)
+
+    new_data.y = data.y
+
+    return new_data
 
 def distance_encoding(dataset, method = 'node_augmentation'):
     original_dataset = copy.deepcopy(dataset)
@@ -202,7 +222,7 @@ def subgraph_extraction(dataset, radius=2):
 ###Graph Encoding
 def graph_encoding(dataset, k=2):
     GE_dataset = copy.deepcopy(dataset)
-    transform = AddLaplacianEigenvectorPE(k=2, attr_name = None)
+    transform = AddLaplacianEigenvectorPE(k, attr_name = None)
     GE_dataset.transform = transform
     return GE_dataset
 
@@ -247,13 +267,16 @@ def add_extra_node_on_each_edge(data):
         new_edge_features.append(edge_feature_tensor)  # for edge (new_node_id, v)
     
     # Convert back to PyG Data object
-    modified_data = from_networkx(G, group_node_attrs=['x'], group_edge_attrs=['edge_attr'])
+    modified_data = from_networkx(G)
 
     # Update node features
     modified_data.x = torch.cat([data.x, torch.stack(new_node_features)], dim=0)
 
     # Update edge features to include only the new edges
     modified_data.edge_attr = torch.stack(new_edge_features)  # Only include new edge features
+
+    # Preserve any additional global attributes
+    modified_data.y = data.y
     
     return modified_data
 
